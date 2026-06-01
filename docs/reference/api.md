@@ -4,78 +4,72 @@
 
 ### `EnvAdapter`
 
-Abstract base class for benchmark environments.
+Abstract base class for benchmark environments (`skillopt/envs/base.py`).
 
 ```python
 class EnvAdapter(ABC):
-    async def execute(self, item, skill, model) -> TaskResult
-    def evaluate(self, prediction, ground_truth) -> float
-    def build_prompt(self, item, skill) -> str
-```
-
-### `DataLoader`
-
-Abstract base class for data loading and splitting.
-
-```python
-class DataLoader(ABC):
     def setup(self, cfg: dict) -> None
-    def get_split_items(self, split: str) -> list[DataItem]
+    def get_dataloader(self) -> BaseDataLoader | None
+    def build_train_env(self, batch_size: int, seed: int, **kwargs)
+    def build_eval_env(self, env_num: int, split: str, seed: int, **kwargs)
+    def rollout(self, env_manager, skill_content: str, out_dir: str, **kwargs) -> list[dict]
+    def reflect(self, results: list[dict], skill_content: str, out_dir: str, **kwargs) -> list[dict | None]
+    def get_task_types(self) -> list[str]
 ```
 
-### `ModelBackend`
-
-Abstract base class for LLM backends.
+The rollout contract expects result rows with at least:
 
 ```python
-class ModelBackend(ABC):
-    async def generate(self, messages, **kwargs) -> ModelResponse
-    async def generate_with_tools(self, messages, tools, **kwargs) -> ModelResponse
+{"id": str, "hard": int, "soft": float}
 ```
 
-### `Trainer`
+### `BaseDataLoader` / `SplitDataLoader`
 
-Main training loop orchestrator.
+Data loader abstractions (`skillopt/datasets/base.py`).
 
 ```python
-class Trainer:
-    def __init__(self, cfg: dict)
-    async def train(self) -> TrainResult
-    async def evaluate(self, skill: str, split: str) -> EvalResult
+class BaseDataLoader(ABC):
+    def setup(self, cfg: dict) -> None
+    def build_train_batch(self, batch_size: int, seed: int, **kwargs) -> BatchSpec
+    def build_eval_batch(self, env_num: int, split: str, seed: int, **kwargs) -> BatchSpec
+
+class SplitDataLoader(BaseDataLoader):
+    def load_raw_items(self, data_path: str) -> list[dict]
+    def load_split_items(self, split_path: str) -> list[dict]
+    def get_split_items(self, split: str) -> list[dict]
 ```
 
-## Data Classes
+### `BatchSpec`
 
-### `DataItem`
+Represents one concrete batch request.
+
+```python
+@dataclass(slots=True)
+class BatchSpec:
+    phase: str
+    split: str
+    seed: int
+    batch_size: int
+    payload: object | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+```
+
+### `RolloutResult` / `RawPatch`
+
+Typed helpers for stage I/O in `skillopt/types.py`.
 
 ```python
 @dataclass
-class DataItem:
+class RolloutResult:
     id: str
-    input: str
-    ground_truth: str
-    metadata: dict = field(default_factory=dict)
-```
+    hard: int
+    soft: float
+    # optional benchmark-specific fields
 
-### `TaskResult`
-
-```python
 @dataclass
-class TaskResult:
-    item_id: str
-    prediction: str
-    score: float
-    trajectory: list[dict]
-```
-
-### `ModelResponse`
-
-```python
-@dataclass
-class ModelResponse:
-    content: str
-    usage: dict
-    model: str
+class RawPatch:
+    patch: Patch
+    source_type: Literal["failure", "success"] = "failure"
 ```
 
 For detailed source code, see the [`skillopt/`](https://github.com/microsoft/SkillOpt/tree/main/skillopt) directory.

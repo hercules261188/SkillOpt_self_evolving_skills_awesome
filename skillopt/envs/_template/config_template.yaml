@@ -5,11 +5,11 @@
 # and customize the values below.
 
 # Inherit global defaults
-_base_: ['../_base_/default.yaml']
+_base_: ../_base_/default.yaml
 
 # ── Environment ──────────────────────────────────
 env:
-  name: your_benchmark            # Must match registry key
+  name: your_benchmark            # Must match _ENV_REGISTRY key in scripts/train.py
   data_path: data/your_benchmark  # Path to your data
   split_mode: ratio               # "ratio" or "split_dir"
   split_ratio: "2:1:7"            # train:val:test

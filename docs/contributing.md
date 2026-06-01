@@ -25,10 +25,10 @@ Open an issue with:
 See [Add a New Benchmark](guide/new-benchmark.md) for the implementation guide.
 
 **Checklist:**
-- [ ] Data loader in `skillopt/envs/<benchmark>/loader.py`
-- [ ] Environment adapter in `skillopt/envs/<benchmark>/env.py`
+- [ ] Data loader in `skillopt/envs/<benchmark>/dataloader.py`
+- [ ] Environment adapter in `skillopt/envs/<benchmark>/adapter.py`
 - [ ] Config file in `configs/<benchmark>/default.yaml`
-- [ ] Registration in `skillopt/envs/__init__.py`
+- [ ] Registration in `scripts/train.py` (`_ENV_REGISTRY`)
 - [ ] Documentation page in `docs/`
 
 ### 🤖 New Model Backend

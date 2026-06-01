@@ -6,9 +6,10 @@ Extend SkillOpt with your own benchmark in ~100 lines of code.
 
 To add a benchmark, you need:
 
-1. **Data Loader** — Loads and splits your dataset
-2. **Environment Adapter** — Executes tasks and returns scores
+1. **Data Loader** — Subclass `SplitDataLoader` to load your split data
+2. **Environment Adapter** — Subclass `EnvAdapter` and implement rollout/reflect hooks
 3. **Config** — YAML configuration file
+4. **Registration** — Add your adapter to the train script registry
 
 ## Step 1: Create the Benchmark Package
 
@@ -19,126 +20,71 @@ touch skillopt/envs/my_benchmark/__init__.py
 
 ## Step 2: Implement the Data Loader
 
-Create `skillopt/envs/my_benchmark/loader.py`:
+Create `skillopt/envs/my_benchmark/dataloader.py`:
 
 ```python
-from skillopt.data.base import DataLoader, DataItem
+from skillopt.datasets.base import SplitDataLoader
 
-class MyBenchmarkDataLoader(DataLoader):
-    """Load and split your benchmark data."""
-    
-    def __init__(self, data_dir: str, **kwargs):
-        super().__init__(**kwargs)
-        self.data_dir = data_dir
-    
-    def setup(self, cfg: dict):
-        """Initialize splits based on config."""
-        self.split_mode = cfg.get('split_mode', 'ratio')
-        # Load your data here
-        self.items = self._load_items()
-        self._create_splits(cfg)
-    
-    def _load_items(self) -> list[DataItem]:
-        """Load raw data into DataItem objects."""
-        items = []
-        # TODO: Load your data
-        for entry in your_data:
-            items.append(DataItem(
-                id=entry['id'],
-                input=entry['question'],
-                ground_truth=entry['answer'],
-                metadata=entry.get('metadata', {})
-            ))
-        return items
-    
-    def get_split_items(self, split: str) -> list[DataItem]:
-        """Return items for a given split (train/valid/test)."""
-        return self.splits[split]
+
+class MyBenchmarkDataLoader(SplitDataLoader):
+    """Load benchmark items from raw data and/or split directories."""
+
+    def load_raw_items(self, data_path: str) -> list[dict]:
+        # For ratio mode, parse your source dataset from data_path.
+        # Return list[dict] where each item has at least a stable "id".
+        return super().load_raw_items(data_path)
+
+    def load_split_items(self, split_path: str) -> list[dict]:
+        # For split_dir mode, parse one split directory.
+        return super().load_split_items(split_path)
 ```
 
 ## Step 3: Implement the Environment Adapter
 
-Create `skillopt/envs/my_benchmark/env.py`:
+Create `skillopt/envs/my_benchmark/adapter.py`:
 
 ```python
-from skillopt.envs.base import EnvAdapter, TaskResult
+from skillopt.envs.base import EnvAdapter
+from skillopt.envs.my_benchmark.dataloader import MyBenchmarkDataLoader
 
-class MyBenchmarkEnv(EnvAdapter):
-    """Execute tasks and evaluate results."""
-    
-    def __init__(self, cfg: dict):
-        super().__init__(cfg)
-    
-    async def execute(self, item: DataItem, skill: str, model) -> TaskResult:
-        """
-        Execute a single task.
-        
-        Args:
-            item: The data item to process
-            skill: Current skill document content
-            model: The target model instance
-            
-        Returns:
-            TaskResult with prediction, score, and trajectory
-        """
-        # Build prompt with skill document
-        prompt = self.build_prompt(item, skill)
-        
-        # Get model response
-        response = await model.generate(prompt)
-        
-        # Extract prediction
-        prediction = self.parse_response(response)
-        
-        # Score against ground truth
-        score = self.evaluate(prediction, item.ground_truth)
-        
-        return TaskResult(
-            item_id=item.id,
-            prediction=prediction,
-            score=score,
-            trajectory=[
-                {"role": "system", "content": skill},
-                {"role": "user", "content": item.input},
-                {"role": "assistant", "content": response}
-            ]
-        )
-    
-    def evaluate(self, prediction: str, ground_truth: str) -> float:
-        """
-        Score a prediction against ground truth.
-        
-        Returns:
-            Float between 0.0 and 1.0
-        """
-        # TODO: Implement your scoring logic
-        # Examples: exact match, F1, ANLS, etc.
-        return float(prediction.strip() == ground_truth.strip())
-    
-    def build_prompt(self, item, skill: str) -> str:
-        """Combine skill document with task input."""
-        return f"{skill}\n\n---\n\nQuestion: {item.input}"
-    
-    def parse_response(self, response: str) -> str:
-        """Extract the answer from model response."""
-        return response.strip()
+class MyBenchmarkAdapter(EnvAdapter):
+    def __init__(self, split_dir: str = "", data_path: str = "", **kwargs):
+        self.dataloader = MyBenchmarkDataLoader(split_dir=split_dir, data_path=data_path, **kwargs)
+
+    def setup(self, cfg: dict) -> None:
+        super().setup(cfg)
+        self.dataloader.setup(cfg)
+
+    def get_dataloader(self):
+        return self.dataloader
+
+    def build_train_env(self, batch_size: int, seed: int, **kwargs):
+        return self.dataloader.build_train_batch(batch_size=batch_size, seed=seed, **kwargs).payload
+
+    def build_eval_env(self, env_num: int, split: str, seed: int, **kwargs):
+        return self.dataloader.build_eval_batch(env_num=env_num, split=split, seed=seed, **kwargs).payload
+
+    def rollout(self, env_manager, skill_content: str, out_dir: str, **kwargs) -> list[dict]:
+        # Run target model on each item in env_manager and return list[dict].
+        # Required keys per row: "id", "hard" (0/1), "soft" (0.0-1.0)
+        raise NotImplementedError
+
+    def reflect(self, results: list[dict], skill_content: str, out_dir: str, **kwargs) -> list[dict | None]:
+        # Convert failure/success analysis into RawPatch-like dicts.
+        raise NotImplementedError
+
+    def get_task_types(self) -> list[str]:
+        return ["my_benchmark"]
 ```
 
 ## Step 4: Register the Benchmark
 
-Add to `skillopt/envs/__init__.py`:
+Add your adapter to `_register_builtins()` in `scripts/train.py`:
 
 ```python
-from .my_benchmark.env import MyBenchmarkEnv
-from .my_benchmark.loader import MyBenchmarkDataLoader
+from skillopt.envs.my_benchmark.adapter import MyBenchmarkAdapter
 
-BENCHMARK_REGISTRY = {
-    # ... existing benchmarks ...
-    'my_benchmark': {
-        'env': MyBenchmarkEnv,
-        'loader': MyBenchmarkDataLoader,
-    },
-}
+_ENV_REGISTRY["my_benchmark"] = MyBenchmarkAdapter
 ```
 
 ## Step 5: Create Config
@@ -146,7 +92,7 @@ BENCHMARK_REGISTRY = {
 Create `configs/my_benchmark/default.yaml`:
 
 ```yaml
-_base_: ['../_base_/default.yaml']
+_base_: ../_base_/default.yaml
 
 env:
   name: my_benchmark
@@ -178,4 +124,5 @@ python scripts/train.py --config configs/my_benchmark/default.yaml
 
 !!! tip
     - Use a small `batch_size` (10-20) for initial testing
-    - The `evaluate()` method is critical — a noisy metric will confuse the optimizer
+    - Start from `skillopt/envs/_template/` and adapt from there
+    - Use an existing adapter (for example `skillopt/envs/officeqa/adapter.py`) as a concrete reference
