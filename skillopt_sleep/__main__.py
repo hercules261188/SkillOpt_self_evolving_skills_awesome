@@ -311,6 +311,13 @@ def _handoff_mine_and_pin(cfg, args, backend, snapshot: str, dry: bool):
             # branch, or every later run re-scans the same stale window.
             state.set_last_harvest(project, started)
             state.save()
+            # Drop the pinned (often empty) digests so the NEXT run re-harvests
+            # instead of reloading a []-pin and never calling harvest again.
+            try:
+                if os.path.exists(digests_path):
+                    os.remove(digests_path)
+            except OSError:
+                pass
         return 0, None
     payload = make_tasks_payload(
         tasks,
@@ -342,13 +349,21 @@ def _run_handoff(cfg, args, *, seed_tasks, task_meta: Dict[str, Any], dry: bool)
     tasks = seed_tasks
     if tasks is None:
         snapshot = os.path.join(hdir, "tasks.json")
+        tasks = None
         if os.path.exists(snapshot):
-            tasks, _meta = load_tasks_file(
-                snapshot,
-                holdout_fraction=cfg.get("holdout_fraction", 0.34),
-                seed=cfg.get("seed", 42),
-            )
-        else:
+            try:
+                tasks, _meta = load_tasks_file(
+                    snapshot,
+                    holdout_fraction=cfg.get("holdout_fraction", 0.34),
+                    seed=cfg.get("seed", 42),
+                )
+            except (ValueError, json.JSONDecodeError, OSError):
+                # Interrupted/corrupt pin from an earlier round: re-mine instead
+                # of crashing the run.
+                print("[sleep] handoff: tasks.json unreadable — re-mining",
+                      file=sys.stderr)
+                tasks = None
+        if tasks is None:
             rc, tasks = _handoff_mine_and_pin(cfg, args, backend, snapshot, dry)
             if tasks is None:
                 return rc
